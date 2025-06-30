@@ -1,9 +1,12 @@
 package com.example.composedrawcanvaasviapath
 
+import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
@@ -34,10 +37,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -64,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import com.example.composedrawcanvaasviapath.ui.theme.ComposeDrawCanvaasviaPathTheme
 
 class MainActivity : ComponentActivity() {
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -83,6 +89,8 @@ data class Draw(
     val stroke: Stroke
 )
 
+@RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+@SuppressLint("ReturnFromAwaitPointerEventScope")
 @Composable
 fun DrawingCanvas() {
     val paths = remember { mutableStateListOf<Draw>() }
@@ -98,81 +106,112 @@ fun DrawingCanvas() {
     var offset by remember { mutableStateOf(Offset.Zero) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Canvas(
+        Card(
             modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        scale *= zoom
-                        scale = scale.coerceIn(0.5f, 5f)
-                        offset += pan * 1.5f
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { touchOffset ->
-                            val x = (touchOffset.x - offset.x) / scale
-                            val y = (touchOffset.y - offset.y) / scale
-                            currentPath = Path().apply {
-                                moveTo(x, y)
-                            }
-                            isDrawing = true
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            currentPath = Path().apply {
-                                addPath(currentPath)
-                                lineTo(
-                                    (change.position.x - offset.x) / scale,
-                                    (change.position.y - offset.y) / scale
-                                )
-                            }
-                            isDrawing = true
-                        },
-                        onDragEnd = {
-                            if (!currentPath.isEmpty) {
-                                paths.add(
-                                    Draw(
-                                        path = Path().apply { addPath(currentPath) },
-                                        color = selectedColor,
-                                        stroke = Stroke(
-                                            width = strokeWidth,
-                                            cap = StrokeCap.Round,
-                                            join = StrokeJoin.Round
-                                        )
-                                    )
-                                )
-                            }
-                            currentPath = Path()
-                            isDrawing = false
-                        }
-                    )
-                }
                 .weight(1f)
+                .padding(horizontal = 20.dp)
+                .padding(top = 50.dp, bottom = 20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background)
         ) {
-            scale(scale, scale, pivot = Offset.Zero) {
-                translate(offset.x / scale, offset.y / scale) {
-                    paths.forEach { draw ->
-                        drawPath(
-                            path = draw.path,
-                            color = draw.color,
-                            style = draw.stroke
-                        )
+            Canvas(
+                modifier = Modifier
+                    .padding(horizontal = 10.dp)
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        var isDrawingGesture = false
+
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val pointers = event.changes
+
+                                if (pointers.size >= 2) {
+                                    val pan = pointers[0].position - pointers[0].previousPosition
+                                    val zoom =
+                                        (pointers[0].position - pointers[1].position).getDistance() /
+                                                (pointers[0].previousPosition - pointers[1].previousPosition).getDistance()
+
+                                    val gestureCenter =
+                                        (pointers[0].position + pointers[1].position) / 2f
+
+                                    val focalBefore = (gestureCenter - offset) / scale
+
+                                    scale *= zoom
+                                    scale = scale.coerceIn(0.5f, 5f)
+
+                                    val focalAfter = (gestureCenter - offset) / scale
+
+                                    offset += (focalAfter - focalBefore) * scale
+                                    offset += pan * 1.5f
+
+                                    pointers.forEach { it.consume() }
+                                    isDrawingGesture = false
+                                } else if (pointers.size == 1) {
+                                    val change = pointers[0]
+                                    if (change.pressed) {
+                                        val x = (change.position.x - offset.x) / scale
+                                        val y = (change.position.y - offset.y) / scale
+                                        if (!isDrawingGesture) {
+                                            currentPath = Path().apply { moveTo(x, y) }
+                                            isDrawing = true
+                                            isDrawingGesture = true
+                                        } else {
+                                            currentPath = Path().apply {
+                                                addPath(currentPath)
+                                                lineTo(x, y)
+                                            }
+                                            isDrawing = true
+                                        }
+                                        change.consume()
+                                    } else {
+                                        if (!currentPath.isEmpty) {
+                                            paths.add(
+                                                Draw(
+                                                    path = Path().apply { addPath(currentPath) },
+                                                    color = selectedColor,
+                                                    stroke = Stroke(
+                                                        width = strokeWidth,
+                                                        cap = StrokeCap.Round,
+                                                        join = StrokeJoin.Round
+                                                    )
+                                                )
+                                            )
+                                        }
+                                        currentPath = Path()
+                                        isDrawing = false
+                                        isDrawingGesture = false
+                                    }
+                                }
+                            }
+                        }
                     }
-                    if (isDrawing && !currentPath.isEmpty) {
-                        drawPath(
-                            path = currentPath,
-                            color = selectedColor,
-                            style = Stroke(
-                                width = strokeWidth,
-                                cap = StrokeCap.Round,
-                                join = StrokeJoin.Round
+            ) {
+                scale(scale, scale, pivot = Offset.Zero) {
+                    translate(offset.x / scale, offset.y / scale) {
+                        paths.forEach { draw ->
+                            drawPath(
+                                path = draw.path,
+                                color = draw.color,
+                                style = draw.stroke
                             )
-                        )
+                        }
+                        if (isDrawing && !currentPath.isEmpty) {
+                            drawPath(
+                                path = currentPath,
+                                color = selectedColor,
+                                style = Stroke(
+                                    width = strokeWidth,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
                     }
                 }
             }
         }
+
         AnimatedVisibility(showStrokePicker) {
             Card(
                 modifier = Modifier
